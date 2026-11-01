@@ -1,7 +1,7 @@
 local fill={}
 local pos1={}
 local pos2={}
-local airfill={}
+local replace={}
 local selected_node={}
 local delete_mode={}
 local undo_stack = {}
@@ -26,6 +26,137 @@ local function is_liquid_content_id(content_id)
     local node_name = minetest.get_name_from_content_id(content_id)
     local def = minetest.registered_nodes[node_name]
     return def ~= nil and def.liquidtype ~= nil and def.liquidtype ~= "none"
+end
+
+local function encode_meta(pos)
+	local raw = minetest.get_meta(pos):to_table()
+	if not raw then return nil end
+	local has_fields = raw.fields and next(raw.fields) ~= nil
+	local has_inv = raw.inventory and next(raw.inventory) ~= nil
+	if not has_fields and not has_inv then return nil end
+
+	local fields = {}
+	for k, v in pairs(raw.fields or {}) do
+		fields[k] = tostring(v)
+	end
+
+	-- to_table() may return ItemStack objects, which JSON cannot store.
+	local inventory = {}
+	for list_name, list in pairs(raw.inventory or {}) do
+		local items = {}
+		for i, stack in ipairs(list) do
+			items[i] = ItemStack(stack):to_string()
+		end
+		inventory[list_name] = items
+	end
+
+	return minetest.write_json({ fields = fields, inventory = inventory }, false)
+end
+
+local function decode_meta(str)
+	if type(str) ~= "string" or str == "" then return nil end
+	local raw = minetest.parse_json(str)
+	if type(raw) ~= "table" then return nil end
+	raw.fields = raw.fields or {}
+	raw.inventory = raw.inventory or {}
+	return raw
+end
+
+local function clear_meta(pos)
+	local m = minetest.get_meta(pos)
+	for _, key in ipairs(m:get_keys()) do
+		m:set_string(key, "")
+	end
+	local inv = m:get_inventory()
+	for list_name in pairs(inv:get_lists()) do
+		inv:set_list(list_name, {})
+	end
+end
+
+local function apply_meta(pos, encoded)
+	local m = minetest.get_meta(pos)
+	local raw = decode_meta(encoded)
+	if not raw then
+		clear_meta(pos)
+		return
+	end
+	for k, v in pairs(raw.fields) do
+		m:set_string(k, tostring(v))
+	end
+	for list_name, list in pairs(raw.inventory) do
+		if type(list) == "table" then
+			m:get_inventory():set_list(list_name, list)
+		end
+	end
+end
+
+local function save_node_timer(pos)
+	local timer = minetest.get_node_timer(pos)
+	if timer and timer:is_started() then
+		return {
+			timeout = timer:get_timeout(),
+			elapsed = timer:get_elapsed()
+		}
+	end
+	return nil
+end
+
+local function restore_node_timer(pos, saved)
+	local timer = minetest.get_node_timer(pos)
+	if not timer then return end
+	-- No saved timer (or an inactive one) means any timer left at this
+	-- position by the previous node must be cleared.
+	if type(saved) ~= "table" or saved.started == false then
+		timer:stop()
+		return
+	end
+	if saved.timeout and saved.elapsed then
+		timer:set(saved.timeout, saved.elapsed)
+	elseif saved.remaining then
+		-- Older save files stored a "remaining" value instead.
+		timer:start(saved.remaining)
+	end
+end
+
+local function push_action(name, action)
+	undo_stack[name] = undo_stack[name] or {}
+	undo_stack[name][#undo_stack[name] + 1] = action
+	if #undo_stack[name] > MAX_HISTORY then
+		table.remove(undo_stack[name], 1)
+	end
+	redo_stack[name] = {}
+end
+
+local function apply_action(action, use_new)
+	local nodes = use_new and action.new_nodes or action.old_nodes
+	local param2_values = use_new and action.new_param2 or action.old_param2
+	local light_values = use_new and action.new_param1 or action.old_param1
+	local metas = use_new and action.new_meta or action.old_meta
+
+	local vm = minetest.get_voxel_manip()
+	vm:read_from_map(action.p1, action.p2)
+	local data = vm:get_data()
+	local param2 = param2_values and vm:get_param2_data()
+	local light = light_values and vm:get_light_data()
+
+	for idx, i in ipairs(action.indices) do
+		data[i] = nodes[idx]
+		if param2 then param2[i] = param2_values[idx] end
+		if light then light[i] = light_values[idx] end
+	end
+
+	vm:set_data(data)
+	if param2 then vm:set_param2_data(param2) end
+	if light then vm:set_light_data(light) end
+	vm:write_to_map()
+
+	if metas then
+		for _, entry in ipairs(metas) do
+			clear_meta(entry.pos)
+			apply_meta(entry.pos, entry.data)
+			restore_node_timer(entry.pos, entry.timer)
+		end
+	end
 end
 
 local function replace_area(name, p1, p2, filter, newnode)
@@ -60,9 +191,7 @@ local function replace_area(name, p1, p2, filter, newnode)
     vm:set_data(data)
     vm:set_param2_data(param2)
     vm:write_to_map()
-    undo_stack[name] = undo_stack[name] or {}
-    redo_stack[name] = {}
-    undo_stack[name][#undo_stack[name]+1] = {
+    push_action(name, {
         p1 = vector.new(p1),
         p2 = vector.new(p2),
         indices = indices,
@@ -70,10 +199,7 @@ local function replace_area(name, p1, p2, filter, newnode)
         old_param2 = old_param2,
         new_nodes = new_nodes,
         new_param2 = new_param2
-    }
-    if #undo_stack[name] > MAX_HISTORY then
-        table.remove(undo_stack[name], 1)
-    end
+    })
 end
 
 minetest.register_chatcommand("pos1",{
@@ -114,10 +240,10 @@ minetest.register_chatcommand("setnode",{
  end
 })
 
-minetest.register_chatcommand("fill",{
+minetest.register_chatcommand("replace",{
  privs={server=true},
  params="<from> <to>",
- description="Fill selected area",
+ description="Replace selected area",
  func=function(name,param)
   if not pos1[name] or not pos2[name] then return false,"Set pos1 and pos2 first." end
   local a,b=param:match("([^ ]+) ([^ ]+)")
@@ -146,12 +272,11 @@ minetest.register_chatcommand("fill",{
    return minetest.get_name_from_content_id(cid)==from
   end
   replace_area(name,p1,p2,filter,to)
-  fill[name]=true
-  return true,"Filled area with "..to
+  return true,"Replaced area with "..to
  end
 })
 
-minetest.register_chatcommand("airfill",{
+minetest.register_chatcommand("fill",{
  privs={server=true},
  params="<from> <to>",
  description="Fill selected area, including air",
@@ -179,7 +304,7 @@ minetest.register_chatcommand("airfill",{
    return true
   end
   replace_area(name,p1,p2,filter,to)
-  airfill[name]=true
+  fill[name]=true
   return true,"Filled area with "..to
  end
 })
@@ -219,22 +344,10 @@ minetest.register_chatcommand("undo",{
   local action=table.remove(stack)
   redo_stack[name]=redo_stack[name] or {}
   redo_stack[name][#redo_stack[name]+1]=action
-  local vm=minetest.get_voxel_manip()
-  local minp,maxp=vm:read_from_map(action.p1,action.p2)
-  local area=VoxelArea:new({MinEdge=minp,MaxEdge=maxp})
-  local data=vm:get_data()
-    local param1=action.old_param1 and vm:get_light_data()
-    local param2=action.old_param2 and vm:get_param2_data()
-  for idx=1,#action.indices do
-   local i=action.indices[idx]
-   data[i]=action.old_nodes[idx]
-     if param1 then param1[i]=action.old_param1[idx] end
-     if param2 then param2[i]=action.old_param2[idx] end
+  if #redo_stack[name] > MAX_HISTORY then
+   table.remove(redo_stack[name], 1)
   end
-  vm:set_data(data)
-    if param1 then vm:set_light_data(param1) end
-    if param2 then vm:set_param2_data(param2) end
-  vm:write_to_map()
+  apply_action(action, false)
   return true,"Nodes changed are reverted."
  end
 })
@@ -247,22 +360,10 @@ minetest.register_chatcommand("redo",{
   local action=table.remove(stack)
   undo_stack[name]=undo_stack[name] or {}
   undo_stack[name][#undo_stack[name]+1]=action
-  local vm=minetest.get_voxel_manip()
-  local minp,maxp=vm:read_from_map(action.p1,action.p2)
-  local area=VoxelArea:new({MinEdge=minp,MaxEdge=maxp})
-  local data=vm:get_data()
-    local param1=action.new_param1 and vm:get_light_data()
-    local param2=action.new_param2 and vm:get_param2_data()
-  for idx=1,#action.indices do
-   local i=action.indices[idx]
-   data[i]=action.new_nodes[idx]
-     if param1 then param1[i]=action.new_param1[idx] end
-     if param2 then param2[i]=action.new_param2[idx] end
+  if #undo_stack[name] > MAX_HISTORY then
+   table.remove(undo_stack[name], 1)
   end
-  vm:set_data(data)
-    if param1 then vm:set_light_data(param1) end
-    if param2 then vm:set_param2_data(param2) end
-  vm:write_to_map()
+  apply_action(action, true)
   return true,"Action redone."
  end
 })
@@ -330,7 +431,7 @@ minetest.register_chatcommand("copy", {
                 end
             end
         end
-        fill[name] = nodes_list
+        replace[name] = nodes_list
         return true, "Copied " .. count .. " nodes to structural clipboard."
     end
 })
@@ -338,7 +439,7 @@ minetest.register_chatcommand("copy", {
 minetest.register_chatcommand("paste", {
     privs = {server = true},
     func = function(name)
-        local nodes_list = fill[name]
+        local nodes_list = replace[name]
         if not nodes_list or type(nodes_list) ~= "table" or #nodes_list == 0 then
             return false, "Clipboard is empty. Run /copy first."
         end
@@ -388,9 +489,7 @@ minetest.register_chatcommand("paste", {
         vm:set_light_data(param1)
         vm:set_param2_data(param2)
         vm:write_to_map()
-        undo_stack[name] = undo_stack[name] or {}
-        redo_stack[name] = {}
-        table.insert(undo_stack[name], {
+        push_action(name, {
             action_type = "paste",
             p1 = p1,
             p2 = p2,
@@ -402,11 +501,18 @@ minetest.register_chatcommand("paste", {
             new_param1 = new_param1,
             new_param2 = new_param2
         })
-        if #undo_stack[name] > MAX_HISTORY then
-            table.remove(undo_stack[name], 1)
-        end
         return true, "Successfully pasted " .. #nodes_list .. " nodes relative to your location."
     end
 })
 
-dofile(minetest.get_modpath("simple_replace_plus") .. "/storage.lua")
+local register_storage = dofile(minetest.get_modpath("simple_replace_plus") .. "/storage.lua")
+register_storage({
+    pos1 = pos1,
+    pos2 = pos2,
+    push_action = push_action,
+    encode_meta = encode_meta,
+    apply_meta = apply_meta,
+    clear_meta = clear_meta,
+    save_node_timer = save_node_timer,
+    restore_node_timer = restore_node_timer,
+})
