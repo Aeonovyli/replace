@@ -2,6 +2,7 @@ local fill={}
 local pos1={}
 local pos2={}
 local replace={}
+local clipboard_state={}
 local selected_node={}
 local delete_mode={}
 local undo_stack = {}
@@ -26,6 +27,65 @@ local function is_liquid_content_id(content_id)
     local node_name = core.get_name_from_content_id(content_id)
     local def = core.registered_nodes[node_name]
     return def ~= nil and def.liquidtype ~= nil and def.liquidtype ~= "none"
+end
+
+-- Resolve a concrete node name. "setnode" refers to the node chosen by /setnode.
+local function resolve_target_node(name, arg)
+    if arg == "setnode" then
+        local node_name = selected_node[name]
+        if not node_name then
+            return nil, "Use /setnode first."
+        end
+        return node_name
+    end
+    if not core.registered_nodes[arg] then
+        return nil, "Not a registered node: " .. arg
+    end
+    return arg
+end
+
+-- Resolve a node name or wildcard pattern. "setnode" refers to the selected node.
+local function resolve_match_pattern(name, arg)
+    if arg == "setnode" then
+        local node_name = selected_node[name]
+        if not node_name then
+            return nil, "Use /setnode first."
+        end
+        return node_name
+    end
+    if not arg:find("*", 1, true) and not core.registered_nodes[arg] then
+        return nil, "Not a registered node: " .. arg
+    end
+    return arg
+end
+
+local function node_name_matches(node_name, pattern)
+    if pattern == "*" then
+        return true
+    end
+    if not pattern:find("*", 1, true) then
+        return node_name == pattern
+    end
+    local lua_pattern = "^"
+        .. pattern:gsub("([%^%$%(%)%%%.%[%]%+%-%?])", "%%%1"):gsub("%*", ".*")
+        .. "$"
+    return node_name:match(lua_pattern) ~= nil
+end
+
+local function make_node_filter(pattern, include_everything)
+    if pattern == nil then
+        if include_everything then
+            return function() return true end
+        end
+        return function(cid)
+            local n = core.get_name_from_content_id(cid)
+            return n ~= "air" and not is_liquid_content_id(cid)
+        end
+    end
+    return function(cid)
+        local n = core.get_name_from_content_id(cid)
+        return node_name_matches(n, pattern)
+    end
 end
 
 local function encode_meta(pos)
@@ -229,7 +289,7 @@ core.register_chatcommand("setnode",{
  func=function(name,param)
   local p=core.get_player_by_name(name)
   if not p then return false,"Player not found." end
-    local node_name=param
+    local node_name=param:match("^%s*(.-)%s*$")
     if node_name=="" then
      node_name=p:get_wielded_item():get_name()
      if node_name=="" then return false,"No node in hand." end
@@ -242,96 +302,83 @@ core.register_chatcommand("setnode",{
 
 core.register_chatcommand("replace",{
  privs={server=true},
- params="<from> <to>",
- description="Replace selected area",
+ params="[<from>] [<to>]",
+ description="Replace selected area. Use * as a wildcard and setnode for the selected node.",
  func=function(name,param)
   if not pos1[name] or not pos2[name] then return false,"Set pos1 and pos2 first." end
-  local a,b=param:match("([^ ]+) ([^ ]+)")
-  local from,to
+  local a,b=param:match("(%S+)%s+(%S+)")
+  local from,to,err
   if a and b then
-   if not minetest.registered_nodes[a] then return false,"Not a registered node: "..a end
-   if not minetest.registered_nodes[b] then return false,"Not a registered node: "..b end
-   from=a
-   to=b
-  elseif param~="" then
-   if not minetest.registered_nodes[param] then return false,"Not a registered node: "..param end
-   selected_node[name]=param
-   from="*"
-   to=param
+   from,err=resolve_match_pattern(name,a)
+   if not from then return false,err end
+   to,err=resolve_target_node(name,b)
+   if not to then return false,err end
+  elseif param:match("%S") then
+   to,err=resolve_target_node(name,param:match("^%s*(.-)%s*$"))
+   if not to then return false,err end
+   selected_node[name]=to
   else
    if not selected_node[name] then return false,"Use /setnode first." end
-   from="*"
    to=selected_node[name]
   end
   local p1,p2=sort_pos(pos1[name],pos2[name])
-  local function filter(cid)
-   if from=="*" then
-    local n=minetest.get_name_from_content_id(cid)
-        return n~="air" and not is_liquid_content_id(cid)
-   end
-   return minetest.get_name_from_content_id(cid)==from
+  replace_area(name,p1,p2,make_node_filter(from),to)
+  if from then
+   return true,"Replaced nodes matching "..from.." with "..to
   end
-  replace_area(name,p1,p2,filter,to)
   return true,"Replaced area with "..to
  end
 })
 
 core.register_chatcommand("fill",{
  privs={server=true},
- params="<from> <to>",
- description="Fill selected area, including air",
+ params="[<from>] [<to>]",
+ description="Fill selected area, including air. Use * as a wildcard and setnode for the selected node.",
  func=function(name,param)
   if not pos1[name] or not pos2[name] then return false,"Set pos1 and pos2 first." end
-  local a,b=param:match("([^ ]+) ([^ ]+)")
-  local from,to
+  local a,b=param:match("(%S+)%s+(%S+)")
+  local from,to,err
   if a and b then
-   if not minetest.registered_nodes[a] then return false,"Not a registered node: "..a end
-   if not minetest.registered_nodes[b] then return false,"Not a registered node: "..b end
-   from=a
-   to=b
-  elseif param~="" then
-   if not minetest.registered_nodes[param] then return false,"Not a registered node: "..param end
-   selected_node[name]=param
-   from="*"
-   to=param
+   from,err=resolve_match_pattern(name,a)
+   if not from then return false,err end
+   to,err=resolve_target_node(name,b)
+   if not to then return false,err end
+  elseif param:match("%S") then
+   to,err=resolve_target_node(name,param:match("^%s*(.-)%s*$"))
+   if not to then return false,err end
+   selected_node[name]=to
   else
    if not selected_node[name] then return false,"Use /setnode first." end
-   from="*"
    to=selected_node[name]
   end
   local p1,p2=sort_pos(pos1[name],pos2[name])
-  local function filter(cid)
-   return true
-  end
-  replace_area(name,p1,p2,filter,to)
+  replace_area(name,p1,p2,make_node_filter(from,true),to)
   fill[name]=true
+  if from then
+   return true,"Filled nodes matching "..from.." with "..to
+  end
   return true,"Filled area with "..to
  end
 })
 
 core.register_chatcommand("delete",{
  privs={server=true},
- params="<node_name>",
- description="Delete blocks within pos1 and pos2",
+ params="[<node_name>]",
+ description="Delete blocks within pos1 and pos2. Use * as a wildcard and setnode for the selected node.",
  func=function(name,param)
   if not pos1[name] or not pos2[name] then return false,"Set pos1 and pos2 first." end
   local p1,p2=sort_pos(pos1[name],pos2[name])
-  if param~="" then
-   if not minetest.registered_nodes[param] then return false,"Not a registered node." end
-   local target=param
-   local function filter(cid)
-    return minetest.get_name_from_content_id(cid)==target
-   end
-   replace_area(name,p1,p2,filter,"air")
-   delete_mode[name]=true
-   return true,"Deleted "..target.." within the selected area"
+  local arg=param:match("^%s*(.-)%s*$")
+  local pattern,err
+  if arg~="" then
+   pattern,err=resolve_match_pattern(name,arg)
+   if not pattern then return false,err end
   end
-  local function filter(cid)
-   local n=minetest.get_name_from_content_id(cid)
-    return n~="air" and not is_liquid_content_id(cid)
-  end
-  replace_area(name,p1,p2,filter,"air")
+  replace_area(name,p1,p2,make_node_filter(pattern),"air")
   delete_mode[name]=true
+  if pattern then
+   return true,"Deleted nodes matching "..pattern.." within the selected area"
+  end
   return true,"Deleted nodes within the selected area"
  end
 })
@@ -368,41 +415,189 @@ core.register_chatcommand("redo",{
  end
 })
 
-minetest.register_chatcommand("waterdelete", {
-    description = "Delete all liquids within pos1 and pos2",
+core.register_chatcommand("waterdelete", {
+    description = "Delete liquids within pos1 and pos2. Use * as a wildcard and setnode for the selected node.",
+    params = "[<node_name>]",
     privs = {server = true},
-    func = function(name)
+    func = function(name, param)
         if not pos1[name] or not pos2[name] then return false, "Set pos1 and pos2 first." end
+        local arg = param:match("^%s*(.-)%s*$")
+        local pattern, err
+        if arg ~= "" then
+            pattern, err = resolve_match_pattern(name, arg)
+            if not pattern then return false, err end
+        end
         local p1, p2 = sort_pos(pos1[name], pos2[name])
         local function filter(cid)
-            local n = minetest.get_name_from_content_id(cid)
-            local def = minetest.registered_nodes[n]
-            return def and def.liquidtype and def.liquidtype ~= "none"
+            local n = core.get_name_from_content_id(cid)
+            return is_liquid_content_id(cid) and (not pattern or node_name_matches(n, pattern))
         end
         replace_area(name, p1, p2, filter, "air")
+        if pattern then
+            return true, "Deleted liquids matching " .. pattern .. " within the selected area"
+        end
         return true, "Deleted all liquids within the selected area"
     end
 })
 
 core.register_chatcommand("waterfill", {
     description = "Fill selected area, replacing only liquids",
+    params = "[<node_name>]",
     privs = {server = true},
-    func = function(name)
+    func = function(name, param)
         if not pos1[name] or not pos2[name] then return false, "Set pos1 and pos2 first." end
-        if not selected_node[name] then return false, "Use /setnode first." end
+        local arg = param:match("^%s*(.-)%s*$")
+        local to, err
+        if arg ~= "" then
+            to, err = resolve_target_node(name, arg)
+            if not to then return false, err end
+            selected_node[name] = to
+        else
+            to = selected_node[name]
+            if not to then return false, "Use /setnode first." end
+        end
         local p1, p2 = sort_pos(pos1[name], pos2[name])
         local function filter(cid)
-            local n = minetest.get_name_from_content_id(cid)
-            local def = minetest.registered_nodes[n]
-            return def and def.liquidtype and def.liquidtype ~= "none"
+            return is_liquid_content_id(cid)
         end
-        replace_area(name, p1, p2, filter, selected_node[name])
-        return true, "Replaced all liquids with " .. selected_node[name]
+        replace_area(name, p1, p2, filter, to)
+        return true, "Replaced all liquids with " .. to
     end
 })
 
-minetest.register_chatcommand("copy", {
+-- Rotation is done in 90 degree steps around the Y axis.
+local ROTATE_STEPS = {[90] = 1, [180] = 2, [270] = 3}
+
+-- Indexed by (facedir value + 1), values taken from WorldEdit's Y-axis rotation.
+local FACEDIR_ROTATE = {
+    [1] = { 1,  2,  3,  0, 13, 14, 15, 12, 17, 18, 19, 16,
+            9, 10, 11,  8,  5,  6,  7,  4, 23, 20, 21, 22},
+    [2] = { 2,  3,  0,  1, 10, 11,  8,  9,  6,  7,  4,  5,
+           18, 19, 16, 17, 14, 15, 12, 13, 22, 23, 20, 21},
+    [3] = { 3,  0,  1,  2, 19, 16, 17, 18, 15, 12, 13, 14,
+            7,  4,  5,  6, 11,  8,  9, 10, 21, 22, 23, 20},
+}
+
+-- Indexed by (wallmounted value + 1).
+local WALLMOUNTED_ROTATE = {
+    [1] = {0, 1, 5, 4, 2, 3, 0, 0},
+    [2] = {0, 1, 3, 2, 5, 4, 0, 0},
+    [3] = {0, 1, 4, 5, 3, 2, 0, 0},
+}
+
+local function get_clipboard_pivots(nodes_list)
+    local min_x, max_x = math.huge, -math.huge
+    local min_z, max_z = math.huge, -math.huge
+    for _, entry in ipairs(nodes_list) do
+        min_x = math.min(min_x, entry.offset.x)
+        max_x = math.max(max_x, entry.offset.x)
+        min_z = math.min(min_z, entry.offset.z)
+        max_z = math.max(max_z, entry.offset.z)
+    end
+    local center_x = (min_x + max_x) / 2
+    local center_z = (min_z + max_z) / 2
+    -- A 90 degree turn only stays on the grid if both pivot coordinates are
+    -- either whole numbers or half numbers. If they differ, nudge the pivot
+    -- to the nearest whole number.
+    local rotate_x, rotate_z = center_x, center_z
+    if (rotate_x - math.floor(rotate_x)) ~= (rotate_z - math.floor(rotate_z)) then
+        rotate_x = math.floor(rotate_x + 0.5)
+        rotate_z = math.floor(rotate_z + 0.5)
+    end
+    return {
+        center_x = center_x,
+        center_z = center_z,
+        rotate_x = rotate_x,
+        rotate_z = rotate_z,
+        steps = 0,
+    }
+end
+
+local function get_rotation_pivot(state, steps)
+    if steps % 2 == 0 then
+        return {x = state.center_x, z = state.center_z}
+    end
+    return {x = state.rotate_x, z = state.rotate_z}
+end
+
+local function rotate_offset(offset, steps, pivot)
+    local dx, dz = offset.x - pivot.x, offset.z - pivot.z
+    local x, z
+    if steps == 1 then
+        x, z = pivot.x + dz, pivot.z - dx
+    elseif steps == 2 then
+        x, z = pivot.x - dx, pivot.z - dz
+    elseif steps == 3 then
+        x, z = pivot.x - dz, pivot.z + dx
+    else
+        x, z = offset.x, offset.z
+    end
+    return vector.new(x, offset.y, z)
+end
+
+local function rotate_param2(param2, paramtype2, steps)
+    if steps == 0 then
+        return param2
+    end
+    if paramtype2 == "facedir" or paramtype2 == "colorfacedir" then
+        local orient = param2 % 32
+        return param2 - orient + (FACEDIR_ROTATE[steps][orient + 1] or orient)
+    elseif paramtype2 == "4dir" or paramtype2 == "color4dir" then
+        local orient = param2 % 4
+        return param2 - orient + ((orient + steps) % 4)
+    elseif paramtype2 == "wallmounted" or paramtype2 == "colorwallmounted" then
+        local orient = param2 % 8
+        return param2 - orient + (WALLMOUNTED_ROTATE[steps][orient + 1] or orient)
+    elseif paramtype2 == "degrotate" then
+        -- degrotate stores 1.5 degree steps.
+        return (param2 - steps * 60) % 240
+    elseif paramtype2 == "colordegrotate" then
+        -- colordegrotate stores 15 degree steps in the lower 5 bits.
+        local rotation = param2 % 32
+        local color = param2 - rotation
+        return color + ((rotation - steps * 6) % 24)
+    end
+    return param2
+end
+
+core.register_chatcommand("rotate", {
     privs = {server = true},
+    params = "<90|180|270>",
+    description = "Rotate the copied blocks around the Y axis",
+    func = function(name, param)
+        local angle = tonumber(param:match("^%s*(.-)%s*$"))
+        local steps = angle and ROTATE_STEPS[angle]
+        if not steps then
+            return false, "Usage: /rotate <90|180|270>"
+        end
+        local nodes_list = replace[name]
+        if not nodes_list or type(nodes_list) ~= "table" or #nodes_list == 0 then
+            return false, "Clipboard is empty. Run /copy first."
+        end
+        local state = clipboard_state[name]
+        if not state then
+            return false, "Clipboard state is missing. Run /copy again."
+        end
+        local total_steps = (state.steps + steps) % 4
+        state.steps = total_steps
+        local pivot = get_rotation_pivot(state, total_steps)
+        local registered_nodes = core.registered_nodes
+        for _, entry in ipairs(nodes_list) do
+            entry.offset = rotate_offset(entry.base_offset or entry.offset, total_steps, pivot)
+            local node_name = core.get_name_from_content_id(entry.data)
+            local def = node_name and registered_nodes[node_name]
+            if def then
+                entry.param2 = rotate_param2(entry.base_param2 or entry.param2,
+                    def.paramtype2, total_steps)
+            end
+        end
+        return true, "Rotated clipboard by " .. (steps * 90) .. " degrees."
+    end
+})
+
+core.register_chatcommand("copy", {
+    privs = {server = true},
+    description = "Copy non-air blocks in the selected area to the clipboard",
     func = function(name)
         if not pos1[name] or not pos2[name] then return false, "Set /pos1 and /pos2 first." end
         local p = core.get_player_by_name(name)
@@ -422,17 +617,26 @@ minetest.register_chatcommand("copy", {
             for y = p1.y, p2.y do
                 for x = p1.x, p2.x do
                     local i = area:index(x, y, z)
-                    count = count + 1
-                    nodes_list[count] = {
-                        offset = vector.new(x - origin_pos.x, y - origin_pos.y, z - origin_pos.z),
-                        data = data[i],
-                        param1 = param1[i],
-                        param2 = param2[i]
-                    }
+                    if data[i] ~= air_cid then
+                        local offset = vector.new(x - origin_pos.x, y - origin_pos.y, z - origin_pos.z)
+                        count = count + 1
+                        nodes_list[count] = {
+                            offset = offset,
+                            base_offset = vector.new(offset),
+                            data = data[i],
+                            param1 = param1[i],
+                            param2 = param2[i],
+                            base_param2 = param2[i]
+                        }
+                    end
                 end
             end
         end
+        if count == 0 then
+            return false, "No non-air nodes found in the selected area."
+        end
         replace[name] = nodes_list
+        clipboard_state[name] = get_clipboard_pivots(nodes_list)
         return true, "Copied " .. count .. " nodes to structural clipboard."
     end
 })
