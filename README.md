@@ -1,19 +1,18 @@
-This mod is for the free game Luanti, now specifically for the VoxelLibre fork.
+This mod is for the free game Luanti, now specifically for the VoxeLibre fork.
 
-I made it with a little help from AI (read made by AI completely), and its purpose is to help in building objects/converting materal. The commands are simple and as follows;
+Commands;
 
-/pos1: Sets position one, one corner of the area.
-
-/pos2: Sets position two, the other corner of the area.
-
-/setnode: Takes object in hand and makes it the replacment for anything replaced.
-
-/fill: Basically a replace command; it finds all except air and water blocks in the area selected and sets them to the /setnode node, whatever that might be. (Please note this will cause the server to crash if it's not an item you can place normally.)
-
-/delete: Converts all blocks between pos1 and pos2 to air blocks.
-
-/airfill: Basically a replace command; it finds all blocks in the area selected and sets them to the /setnode node, whatever that might be (Please note this will cause the server to crash if it's not an item you can place normally.)
-
-/undo: Undo the last action.
-
-/redo: Redo the last undone action.
+pos1 = set the first corner of the area to be edited
+pos2 = set the second corner of the area to be edited
+setnode = set the node for replacing to either the node held or the node specified
+replace = by default no values, replace area selected with setnode
+fill = completely replace everything in the area with setnode or the node specified
+waterfill = fill liquids with setnode or the node specified
+waterdelete = delete liquids in area specified
+delete = replace everything in area with air
+copy = save the blocks in the area to internal clipbiard
+paste = load the blocks relative to your position
+save = save area specified as .txt in replace_data
+load = load area specified from .txt in replace_data
+undo = undo last action
+redo = redo last action after being undone
