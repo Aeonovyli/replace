@@ -16,3 +16,5 @@ Commands;
 * load = load area specified from .txt in replace_data
 * undo = undo last action
 * redo = redo last action after being undone
+
+Pull requests and comments welcome. This mod was made with the grudging assistance of AI.
