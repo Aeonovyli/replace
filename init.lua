@@ -23,13 +23,13 @@ local function sort_pos(p1,p2)
 end
 
 local function is_liquid_content_id(content_id)
-    local node_name = minetest.get_name_from_content_id(content_id)
-    local def = minetest.registered_nodes[node_name]
+    local node_name = core.get_name_from_content_id(content_id)
+    local def = core.registered_nodes[node_name]
     return def ~= nil and def.liquidtype ~= nil and def.liquidtype ~= "none"
 end
 
 local function encode_meta(pos)
-	local raw = minetest.get_meta(pos):to_table()
+	local raw = core.get_meta(pos):to_table()
 	if not raw then return nil end
 	local has_fields = raw.fields and next(raw.fields) ~= nil
 	local has_inv = raw.inventory and next(raw.inventory) ~= nil
@@ -50,12 +50,12 @@ local function encode_meta(pos)
 		inventory[list_name] = items
 	end
 
-	return minetest.write_json({ fields = fields, inventory = inventory }, false)
+	return core.write_json({ fields = fields, inventory = inventory }, false)
 end
 
 local function decode_meta(str)
 	if type(str) ~= "string" or str == "" then return nil end
-	local raw = minetest.parse_json(str)
+	local raw = core.parse_json(str)
 	if type(raw) ~= "table" then return nil end
 	raw.fields = raw.fields or {}
 	raw.inventory = raw.inventory or {}
@@ -63,7 +63,7 @@ local function decode_meta(str)
 end
 
 local function clear_meta(pos)
-	local m = minetest.get_meta(pos)
+	local m = core.get_meta(pos)
 	for _, key in ipairs(m:get_keys()) do
 		m:set_string(key, "")
 	end
@@ -74,7 +74,7 @@ local function clear_meta(pos)
 end
 
 local function apply_meta(pos, encoded)
-	local m = minetest.get_meta(pos)
+	local m = core.get_meta(pos)
 	local raw = decode_meta(encoded)
 	if not raw then
 		clear_meta(pos)
@@ -91,7 +91,7 @@ local function apply_meta(pos, encoded)
 end
 
 local function save_node_timer(pos)
-	local timer = minetest.get_node_timer(pos)
+	local timer = core.get_node_timer(pos)
 	if timer and timer:is_started() then
 		return {
 			timeout = timer:get_timeout(),
@@ -102,7 +102,7 @@ local function save_node_timer(pos)
 end
 
 local function restore_node_timer(pos, saved)
-	local timer = minetest.get_node_timer(pos)
+	local timer = core.get_node_timer(pos)
 	if not timer then return end
 	-- No saved timer (or an inactive one) means any timer left at this
 	-- position by the previous node must be cleared.
@@ -133,7 +133,7 @@ local function apply_action(action, use_new)
 	local light_values = use_new and action.new_param1 or action.old_param1
 	local metas = use_new and action.new_meta or action.old_meta
 
-	local vm = minetest.get_voxel_manip()
+	local vm = core.get_voxel_manip()
 	vm:read_from_map(action.p1, action.p2)
 	local data = vm:get_data()
 	local param2 = param2_values and vm:get_param2_data()
@@ -160,12 +160,12 @@ local function apply_action(action, use_new)
 end
 
 local function replace_area(name, p1, p2, filter, newnode)
-    local vm = minetest.get_voxel_manip()
+    local vm = core.get_voxel_manip()
     local minp, maxp = vm:read_from_map(p1, p2)
     local area = VoxelArea:new({MinEdge = minp, MaxEdge = maxp})
     local data = vm:get_data()
     local param2 = vm:get_param2_data()
-    local cid_new = minetest.get_content_id(newnode)
+    local cid_new = core.get_content_id(newnode)
     local indices = {}
     local old_nodes = {}
     local old_param2 = {}
@@ -202,45 +202,45 @@ local function replace_area(name, p1, p2, filter, newnode)
     })
 end
 
-minetest.register_chatcommand("pos1",{
+core.register_chatcommand("pos1",{
  privs={server=true},
  func=function(name)
-  local p=minetest.get_player_by_name(name)
+  local p=core.get_player_by_name(name)
   if not p then return end
   pos1[name]=vector.round(p:get_pos())
-  return true,"Position 1 set to "..minetest.pos_to_string(pos1[name])
+  return true,"Position 1 set to "..core.pos_to_string(pos1[name])
  end
 })
 
-minetest.register_chatcommand("pos2",{
+core.register_chatcommand("pos2",{
  privs={server=true},
  func=function(name)
-  local p=minetest.get_player_by_name(name)
+  local p=core.get_player_by_name(name)
   if not p then return end
   pos2[name]=vector.round(p:get_pos())
-  return true,"Position 2 set to "..minetest.pos_to_string(pos2[name])
+  return true,"Position 2 set to "..core.pos_to_string(pos2[name])
  end
 })
 
-minetest.register_chatcommand("setnode",{
+core.register_chatcommand("setnode",{
  privs={server=true},
  params="[<node_name>]",
  description="Select a replacement node by name or from your hand.",
  func=function(name,param)
-  local p=minetest.get_player_by_name(name)
+  local p=core.get_player_by_name(name)
   if not p then return false,"Player not found." end
     local node_name=param
     if node_name=="" then
      node_name=p:get_wielded_item():get_name()
      if node_name=="" then return false,"No node in hand." end
     end
-    if not minetest.registered_nodes[node_name] then return false,"Not a placeable node: "..node_name end
+    if not core.registered_nodes[node_name] then return false,"Not a placeable node: "..node_name end
     selected_node[name]=node_name
     return true,"Selected node: "..node_name
  end
 })
 
-minetest.register_chatcommand("replace",{
+core.register_chatcommand("replace",{
  privs={server=true},
  params="<from> <to>",
  description="Replace selected area",
@@ -276,7 +276,7 @@ minetest.register_chatcommand("replace",{
  end
 })
 
-minetest.register_chatcommand("fill",{
+core.register_chatcommand("fill",{
  privs={server=true},
  params="<from> <to>",
  description="Fill selected area, including air",
@@ -309,7 +309,7 @@ minetest.register_chatcommand("fill",{
  end
 })
 
-minetest.register_chatcommand("delete",{
+core.register_chatcommand("delete",{
  privs={server=true},
  params="<node_name>",
  description="Delete blocks within pos1 and pos2",
@@ -336,7 +336,7 @@ minetest.register_chatcommand("delete",{
  end
 })
 
-minetest.register_chatcommand("undo",{
+core.register_chatcommand("undo",{
  privs={server=true},
  func=function(name)
   local stack=undo_stack[name]
@@ -352,7 +352,7 @@ minetest.register_chatcommand("undo",{
  end
 })
 
-minetest.register_chatcommand("redo",{
+core.register_chatcommand("redo",{
  privs={server=true},
  func=function(name)
   local stack=redo_stack[name]
@@ -384,7 +384,7 @@ minetest.register_chatcommand("waterdelete", {
     end
 })
 
-minetest.register_chatcommand("waterfill", {
+core.register_chatcommand("waterfill", {
     description = "Fill selected area, replacing only liquids",
     privs = {server = true},
     func = function(name)
@@ -405,16 +405,17 @@ minetest.register_chatcommand("copy", {
     privs = {server = true},
     func = function(name)
         if not pos1[name] or not pos2[name] then return false, "Set /pos1 and /pos2 first." end
-        local p = minetest.get_player_by_name(name)
+        local p = core.get_player_by_name(name)
         if not p then return false, "Player not found." end
         local p1, p2 = sort_pos(pos1[name], pos2[name])
         local origin_pos = pos1[name]
-        local vm = minetest.get_voxel_manip()
+        local vm = core.get_voxel_manip()
         local minp, maxp = vm:read_from_map(p1, p2)
         local area = VoxelArea:new({MinEdge = minp, MaxEdge = maxp})
         local data = vm:get_data()
         local param1 = vm:get_light_data()
         local param2 = vm:get_param2_data()
+        local air_cid = core.get_content_id("air")
         local nodes_list = {}
         local count = 0
         for z = p1.z, p2.z do
@@ -436,14 +437,14 @@ minetest.register_chatcommand("copy", {
     end
 })
 
-minetest.register_chatcommand("paste", {
+core.register_chatcommand("paste", {
     privs = {server = true},
     func = function(name)
         local nodes_list = replace[name]
         if not nodes_list or type(nodes_list) ~= "table" or #nodes_list == 0 then
             return false, "Clipboard is empty. Run /copy first."
         end
-        local p = minetest.get_player_by_name(name)
+        local p = core.get_player_by_name(name)
         if not p then return false, "Player not found." end
         local player_pos = vector.round(p:get_pos())
         local min_offset = vector.new(math.huge, math.huge, math.huge)
@@ -458,7 +459,7 @@ minetest.register_chatcommand("paste", {
         end
         local p1 = vector.add(player_pos, min_offset)
         local p2 = vector.add(player_pos, max_offset)
-        local vm = minetest.get_voxel_manip()
+        local vm = core.get_voxel_manip()
         local minp, maxp = vm:read_from_map(p1, p2)
         local area = VoxelArea:new({MinEdge = minp, MaxEdge = maxp})
         local data = vm:get_data()
@@ -505,7 +506,7 @@ minetest.register_chatcommand("paste", {
     end
 })
 
-local register_storage = dofile(minetest.get_modpath("replace") .. "/storage.lua")
+local register_storage = dofile(core.get_modpath("replace") .. "/storage.lua")
 register_storage({
     pos1 = pos1,
     pos2 = pos2,
