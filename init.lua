@@ -505,7 +505,7 @@ minetest.register_chatcommand("paste", {
     end
 })
 
-local register_storage = dofile(minetest.get_modpath("simple_replace_plus") .. "/storage.lua")
+local register_storage = dofile(minetest.get_modpath("replace") .. "/storage.lua")
 register_storage({
     pos1 = pos1,
     pos2 = pos2,
