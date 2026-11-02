@@ -4,7 +4,7 @@ local function get_save_path(param)
 	if not param:match("^[%w_%-%.]+$") then
 		return nil
 	end
-	local dir = minetest.get_worldpath() .. "/simple_replace_plus_data"
+	local dir = minetest.get_worldpath() .. "/replace_data"
 	minetest.mkdir(dir)
 	return dir .. "/" .. param .. ".txt"
 end
