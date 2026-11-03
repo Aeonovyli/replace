@@ -4,8 +4,8 @@ local function get_save_path(param)
 	if not param:match("^[%w_%-%.]+$") then
 		return nil
 	end
-	local dir = minetest.get_worldpath() .. "/replace_data"
-	minetest.mkdir(dir)
+	local dir = core.get_worldpath() .. "/replace_data"
+	core.mkdir(dir)
 	return dir .. "/" .. param .. ".txt"
 end
 
@@ -23,7 +23,7 @@ local function validate_schematic(schematic)
 			or type(entry.node.name) ~= "string" then
 			return nil, "Corrupted schematic data."
 		end
-		if not minetest.registered_nodes[entry.node.name] then
+		if not core.registered_nodes[entry.node.name] then
 			return nil, "Slot references an unknown node: " .. entry.node.name
 		end
 		if entry.node.param2 ~= nil and type(entry.node.param2) ~= "number" then
@@ -34,7 +34,7 @@ local function validate_schematic(schematic)
 end
 
 return function(srp)
-	minetest.register_chatcommand("save", {
+	core.register_chatcommand("save", {
 		privs = { server = true },
 		params = "<slot_name>",
 		description = "Save structural contents inside selected nodes to persistent database",
@@ -65,7 +65,7 @@ return function(srp)
 			local file_path = get_save_path(param)
 			if not file_path then return false, "Invalid slot name." end
 
-			local vm = minetest.get_voxel_manip()
+			local vm = core.get_voxel_manip()
 			local minp, maxp = vm:read_from_map(min_pos, max_pos)
 			local area = VoxelArea:new({ MinEdge = minp, MaxEdge = maxp })
 			local data = vm:get_data()
@@ -77,7 +77,7 @@ return function(srp)
 				for y = min_pos.y, max_pos.y do
 					for x = min_pos.x, max_pos.x do
 						local i = area:index(x, y, z)
-						local node_name = minetest.get_name_from_content_id(data[i])
+						local node_name = core.get_name_from_content_id(data[i])
 						if node_name and node_name ~= "air" then
 							local pos = { x = x, y = y, z = z }
 							schematic[#schematic + 1] = {
@@ -97,14 +97,14 @@ return function(srp)
 
 			local file = io.open(file_path, "w")
 			if not file then return false, "Failed to write file." end
-			file:write(minetest.serialize(schematic))
+			file:write(core.serialize(schematic))
 			file:close()
 
 			return true, "Saved " .. #schematic .. " nodes to slot: " .. param
 		end
 	})
 
-	minetest.register_chatcommand("load", {
+	core.register_chatcommand("load", {
 		privs = { server = true },
 		params = "<slot_name>",
 		description = "Load persistent slot structural configurations onto current pos1 position",
@@ -121,7 +121,7 @@ return function(srp)
 			local raw_data = file:read("*all")
 			file:close()
 
-			local schematic, err = validate_schematic(minetest.deserialize(raw_data))
+			local schematic, err = validate_schematic(core.deserialize(raw_data))
 			if not schematic then return false, err end
 
 			local min_offset = { x = math.huge, y = math.huge, z = math.huge }
@@ -153,7 +153,7 @@ return function(srp)
 				return false, "Loaded area exceeds maximum volume of " .. MAX_VOLUME .. "."
 			end
 
-			local vm = minetest.get_voxel_manip()
+			local vm = core.get_voxel_manip()
 			local minp, maxp = vm:read_from_map(sort_p1, sort_p2)
 			local area = VoxelArea:new({ MinEdge = minp, MaxEdge = maxp })
 			local data = vm:get_data()
@@ -171,7 +171,7 @@ return function(srp)
 				local tz = anchor.z + entry.off.z
 				local i = area:index(tx, ty, tz)
 				local pos = { x = tx, y = ty, z = tz }
-				local cid = minetest.get_content_id(entry.node.name)
+				local cid = core.get_content_id(entry.node.name)
 
 				indices[#indices + 1] = i
 
