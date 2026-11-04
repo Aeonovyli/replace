@@ -72,13 +72,14 @@ return function(srp)
 			local param2 = vm:get_param2_data()
 
 			local origin = p1
+			local in_shape = srp.make_shape_filter(name, min_pos, max_pos)
 			local schematic = {}
 			for z = min_pos.z, max_pos.z do
 				for y = min_pos.y, max_pos.y do
 					for x = min_pos.x, max_pos.x do
 						local i = area:index(x, y, z)
 						local node_name = core.get_name_from_content_id(data[i])
-						if node_name and node_name ~= "air" then
+						if in_shape(x, y, z) and node_name and node_name ~= "air" then
 							local pos = { x = x, y = y, z = z }
 							schematic[#schematic + 1] = {
 								off = { x = x - origin.x, y = y - origin.y, z = z - origin.z },
