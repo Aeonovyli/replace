@@ -19,6 +19,6 @@ Commands;
 * undo = undo last action, including removing the entities that a paste spawned
 * redo = redo last action after being undone, including respawning its entities
 
-Known issue: mob spawners can glitch when created or moved with these commands. They may not always activate, and undo/redo with spawners may leave a stray doll or timer.
+Known issue: copying and pasting areas with many entities can overload the game and cause lag or glitches, because every copied entity is spawned at once.
 
 Pull requests and comments welcome. This mod was made with the assistance of AI.
