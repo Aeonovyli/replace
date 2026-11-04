@@ -19,6 +19,6 @@ Commands;
 * undo = undo last action, including removing the entities that a paste spawned
 * redo = redo last action after being undone, including respawning its entities
 
-Known issue: copying and pasting areas with many entities can overload the game and cause lag or glitches, because every copied entity is spawned at once.
+Known issue: mob spawners, when filled, can have so many entities that the game will glitch.
 
 Pull requests and comments welcome. This mod was made with the assistance of AI.
