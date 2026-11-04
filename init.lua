@@ -216,6 +216,7 @@ local function get_area_objects(p1, p2)
 end
 
 local function spawn_action_entities(action)
+	action.spawned_objects = {}
 	for _, entry in ipairs(action.entities or {}) do
 		local obj = core.add_entity(entry.pos, entry.name, entry.staticdata or "")
 		if obj then
@@ -226,6 +227,7 @@ local function spawn_action_entities(action)
 			if ent then
 				ent._replace_paste_id = action.paste_id
 			end
+			action.spawned_objects[#action.spawned_objects + 1] = obj
 		end
 	end
 end
@@ -233,13 +235,56 @@ end
 local function remove_action_entities(action)
 	if not action.paste_id then return end
 	if not action.entities or #action.entities == 0 then return end
-	local p1 = action.entity_p1 or action.p1
-	local p2 = action.entity_p2 or action.p2
+
+	-- Remove the exact objects spawned by this action. Mobs can walk away from
+	-- the pasted area, so searching the area alone is not reliable.
+	for _, obj in ipairs(action.spawned_objects or {}) do
+		local ok, pos = pcall(function() return obj:get_pos() end)
+		if ok and pos then
+			obj:remove()
+		end
+	end
+	action.spawned_objects = {}
+
+	-- Fallback for objects that were unloaded and later reloaded, where the
+	-- tag is restored from the entity's saved data.
+	local p1 = vector.subtract(action.entity_p1 or action.p1, vector.new(8, 8, 8))
+	local p2 = vector.add(action.entity_p2 or action.p2, vector.new(8, 8, 8))
 	for _, obj in ipairs(get_area_objects(p1, p2)) do
 		if not obj:is_player() then
 			local ent = obj:get_luaentity()
 			if ent and ent._replace_paste_id == action.paste_id then
 				obj:remove()
+			end
+		end
+	end
+end
+
+-- VoxelManip writes do not run node callbacks, so constructors are called by
+-- hand for nodes placed by replace and fill.
+local function run_on_construct(positions)
+	for _, pos in ipairs(positions or {}) do
+		local def = core.registered_nodes[core.get_node(pos).name]
+		if def and def.on_construct then
+			pcall(def.on_construct, pos)
+		end
+	end
+end
+
+-- Mob spawners have no on_construct. setup_spawner writes their settings,
+-- creates the doll and starts the spawn timer.
+local function activate_spawners(positions)
+	if not mcl_mobspawners or not mcl_mobspawners.setup_spawner then return end
+	for _, pos in ipairs(positions or {}) do
+		if core.get_node(pos).name == "mcl_mobspawners:spawner" then
+			local meta = core.get_meta(pos)
+			if meta:get_string("Mob") == "" then
+				pcall(mcl_mobspawners.setup_spawner, pos)
+			else
+				local timer = core.get_node_timer(pos)
+				if timer and not timer:is_started() then
+					timer:start(2)
+				end
 			end
 		end
 	end
@@ -266,7 +311,22 @@ local function apply_action(action, use_new)
 	vm:set_data(data)
 	if param2 then vm:set_param2_data(param2) end
 	if light then vm:set_light_data(light) end
+	vm:update_liquids()
 	vm:write_to_map()
+
+	local positions = action.positions
+	if not positions and metas then
+		positions = {}
+		for _, entry in ipairs(metas) do
+			positions[#positions + 1] = entry.pos
+		end
+	end
+
+	-- Pasted nodes already carry their metadata and timers; other actions
+	-- replace nodes wholesale, so their constructors have to run again.
+	if action.action_type ~= "paste" then
+		run_on_construct(positions)
+	end
 
 	if metas then
 		for _, entry in ipairs(metas) do
@@ -275,6 +335,8 @@ local function apply_action(action, use_new)
 			restore_node_timer(entry.pos, entry.timer)
 		end
 	end
+
+	activate_spawners(positions)
 
 	if use_new then
 		spawn_action_entities(action)
@@ -316,6 +378,7 @@ local function replace_area(name, p1, p2, filter, newnode)
     local old_param2 = {}
     local new_nodes = {}
     local new_param2 = {}
+    local positions = {}
     for z = p1.z, p2.z do
         for y = p1.y, p2.y do
             for x = p1.x, p2.x do
@@ -329,21 +392,29 @@ local function replace_area(name, p1, p2, filter, newnode)
                     param2[i] = 0
                     new_nodes[#new_nodes+1] = cid_new
                     new_param2[#new_param2+1] = 0
+                    if old ~= cid_new then
+                        positions[#positions+1] = {x = x, y = y, z = z}
+                    end
                 end
             end
         end
     end
     vm:set_data(data)
     vm:set_param2_data(param2)
+    vm:update_liquids()
     vm:write_to_map()
+    run_on_construct(positions)
+    activate_spawners(positions)
     push_action(name, {
+        action_type = "replace",
         p1 = vector.new(p1),
         p2 = vector.new(p2),
         indices = indices,
         old_nodes = old_nodes,
         old_param2 = old_param2,
         new_nodes = new_nodes,
-        new_param2 = new_param2
+        new_param2 = new_param2,
+        positions = positions
     })
 end
 
@@ -800,9 +871,11 @@ core.register_chatcommand("paste", {
         local new_param2 = {}
         local old_meta = {}
         local new_meta = {}
+        local positions = {}
         for idx, entry in ipairs(nodes_list) do
             local absolute_pos = vector.add(player_pos, entry.offset)
             local pos = {x = absolute_pos.x, y = absolute_pos.y, z = absolute_pos.z}
+            positions[idx] = pos
             local i = area:index(absolute_pos.x, absolute_pos.y, absolute_pos.z)
             indices[idx] = i
             old_nodes[idx] = data[i]
@@ -828,12 +901,14 @@ core.register_chatcommand("paste", {
         vm:set_data(data)
         vm:set_light_data(param1)
         vm:set_param2_data(param2)
+        vm:update_liquids()
         vm:write_to_map()
         for _, entry in ipairs(new_meta) do
             clear_meta(entry.pos)
             apply_meta(entry.pos, entry.data)
             restore_node_timer(entry.pos, entry.timer)
         end
+        activate_spawners(positions)
         local entity_spawns = {}
         local entity_p1 = vector.new(math.huge, math.huge, math.huge)
         local entity_p2 = vector.new(-math.huge, -math.huge, -math.huge)
@@ -875,7 +950,8 @@ core.register_chatcommand("paste", {
             new_param1 = new_param1,
             new_param2 = new_param2,
             old_meta = old_meta,
-            new_meta = new_meta
+            new_meta = new_meta,
+            positions = positions
         }
         push_action(name, action)
         spawn_action_entities(action)
@@ -895,4 +971,5 @@ register_storage({
     clear_meta = clear_meta,
     save_node_timer = save_node_timer,
     restore_node_timer = restore_node_timer,
+    activate_spawners = activate_spawners,
 })

@@ -9,13 +9,16 @@ Commands;
 * replace = by default no values, replace area selected with setnode; accepts wildcards such as mcl_core:* and "setnode" as a node name
 * fill = completely replace everything in the area with setnode or the node specified; accepts wildcards and "setnode"
 * delete = replace everything in area with air; accepts wildcards such as mcl_core:* and "setnode"
+* replace and fill run each new block's constructor; liquids start flowing and mob spawners start spawning after replace, fill, paste, load, undo, and redo
 * water = a filter keyword usable with delete, replace, and fill. It means any liquid, so "delete water" removes liquids and "replace water <node>" or "fill water <node>" fills liquids with that node
 * copy = save the non-air blocks, their metadata and timers, and any entities in the area to the internal clipboard; the clipboard is trimmed to the outermost blocks, so empty space around them does not add an offset
 * rotate = rotate the copied blocks and entities in place by 90, 180, or 270 degrees before pasting. Rotations add up; run rotate with no value to see the current rotation
 * paste = load the blocks, metadata, timers, and entities relative to your position
 * save = save the selected blocks, their metadata and timers as .txt in replace_data
 * load = load a saved slot at pos1
-* undo = undo last action
-* redo = redo last action after being undone
+* undo = undo last action, including removing the entities that a paste spawned
+* redo = redo last action after being undone, including respawning its entities
+
+Known issue: mob spawners can glitch when created or moved with these commands. They may not always activate, and undo/redo with spawners may leave a stray doll or timer.
 
 Pull requests and comments welcome. This mod was made with the assistance of AI.

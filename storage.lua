@@ -165,6 +165,7 @@ return function(srp)
 			local old_meta = {}
 			local new_nodes, new_param2 = {}, {}
 			local new_meta = {}
+			local positions = {}
 
 			for _, entry in ipairs(schematic) do
 				local tx = anchor.x + entry.off.x
@@ -175,6 +176,7 @@ return function(srp)
 				local cid = core.get_content_id(entry.node.name)
 
 				indices[#indices + 1] = i
+				positions[#positions + 1] = pos
 
 				old_nodes[#old_nodes + 1] = data[i]
 				old_param2[#old_param2 + 1] = param2[i]
@@ -198,6 +200,7 @@ return function(srp)
 
 			vm:set_data(data)
 			vm:set_param2_data(param2)
+			vm:update_liquids()
 			vm:write_to_map()
 
 			for j, entry in ipairs(schematic) do
@@ -206,8 +209,12 @@ return function(srp)
 				srp.apply_meta(pos, entry.meta)
 				srp.restore_node_timer(pos, entry.timer)
 			end
+			if srp.activate_spawners then
+				srp.activate_spawners(positions)
+			end
 
 			srp.push_action(name, {
+				action_type = "load",
 				p1 = sort_p1,
 				p2 = sort_p2,
 				indices = indices,
@@ -216,7 +223,8 @@ return function(srp)
 				new_nodes = new_nodes,
 				new_param2 = new_param2,
 				old_meta = old_meta,
-				new_meta = new_meta
+				new_meta = new_meta,
+				positions = positions
 			})
 
 			return true, "Loaded " .. #schematic .. " nodes from slot: " .. param
